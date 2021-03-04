@@ -1,6 +1,7 @@
 import sys
 from typing import TYPE_CHECKING, Tuple
 import wx
+from amulet.api.errors import ChunkDoesNotExist
 
 from amulet.operations.fill import fill
 
@@ -15,8 +16,6 @@ if TYPE_CHECKING:
 
 
 class FloodFill(wx.Panel, OperationUI):
-    count = 0
-
     def __init__(
             self,
             parent: wx.Window,
@@ -43,6 +42,10 @@ class FloodFill(wx.Panel, OperationUI):
         self._sizer.Add(self._find_size_label, 0, wx.LEFT | wx.RIGHT, 5)
 
         self._find_size = wx.SpinCtrl(self, style=wx.SP_ARROW_KEYS, min=0, max=2000000000, initial=0)
+        default_value = options.get('find_size')
+        if default_value is not None:
+            self._find_size.SetValue(int(default_value))
+
         self._sizer.Add(self._find_size, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 5)
 
         self._block_define_label = wx.StaticText(self, wx.ID_ANY, "空洞を埋めるブロック")
@@ -113,59 +116,65 @@ class FloodFill(wx.Panel, OperationUI):
         sys.setrecursionlimit(2000000000)
 
         dimension = self.canvas.dimension
-        self.count = 0
+        count = 0
+        que_count = 0
         max_count = self._find_size.GetValue()
         min_x, min_y, min_z = self.canvas.selection.selection_group.min
         max_x, max_y, max_z = self.canvas.selection.selection_group.max
 
         # 範囲選択が1マスでない場合エラー
         if not (min_x == (max_x - 1) and min_y == (max_y - 1) and min_z == (max_z - 1)):
-            wx.MessageBox("選択範囲が1マスではありません", "バケツプラグイン")
+            wx.MessageBox("選択範囲が1マスではありません", "塗りつぶし")
             return
 
-        self._flood_fill_check(min_x, min_y, min_z, dimension, max_count)
+        queue = [(min_x, min_y, min_z)]
 
-        # 探査ブロック数が最大値を超えた場合のメッセージ表示
-        if 0 < max_count <= self.count:
-            wx.MessageBox("探査数が最大値に到達しました")
-            return
+        while len(queue) > 0:
+            x, y, z = queue.pop()
+            cx, cz = x >> 4, z >> 4
+            offset_x, offset_z = x - 16 * cx, z - 16 * cz
+            count += 1
 
-    def _flood_fill_check(self, x: int, y: int, z: int, dimension: str, max_count: int):
-        cx, cz = x >> 4, z >> 4
-        offset_x, offset_z = x - 16 * cx, z - 16 * cz
+            try:
+                chunk = self.world.get_chunk(cx, cz, dimension)
+            except ChunkDoesNotExist:
+                # チャンク読み込めなかったら次のループ
+                continue
 
-        # チャンクが存在しない場合は終わり
-        if self.world.has_chunk(cx, cz, dimension):
-            return
+            # 探査ブロックが空気ブロック以外の場合次のループ
+            if not (chunk.get_block(offset_x, y, offset_z).base_name == "air"
+                    or chunk.get_block(offset_x, y, offset_z).base_name == "cave_air"
+                    or chunk.get_block(offset_x, y, offset_z).base_name == "void_air"):
+                continue
 
-        chunk = self.world.get_chunk(cx, cz, dimension)
-
-        # 探査ブロックが空気ブロックの場合終わり
-        if not (chunk.get_block(offset_x, y, offset_z).base_name == "air"
-                or chunk.get_block(offset_x, y, offset_z).base_name == "cave_air"
-                or chunk.get_block(offset_x, y, offset_z).base_name == "void_air"):
-            return
-
-        # 探査ブロックの最大数を超えた場合終わり
-        if max_count > 0:
-            if self.count >= max_count:
+            # 探査ブロックの最大数を超えた場合終わり
+            if 0 < max_count <= count:
+                wx.MessageBox("探査数が最大値に到達しました\n"
+                              + "検査を行った分を塗りつぶしてあります\n"
+                              + "不要な場合はRedoを実行してください", "塗りつぶし")
                 return
-            self.count += 1
 
-        print("X:" + str(x) + " Y:" + str(y) + " Z:" + str(z) + " COUNT:" + str(self.count) + "/" + str(max_count))
+            # ブロックの設置
+            chunk.set_block(offset_x, y, offset_z, self._get_fill_block())
 
-        # ブロックの設置
-        chunk.set_block(offset_x, y, offset_z, self._get_fill_block())
+            # チャンクのセーブフラグをTrueにする
+            chunk.changed = True
 
-        # チャンクのセーブフラグをTrueにする
-        chunk.changed = True
+            # 隣接するブロックの探査キューを追加
+            queue.append((x + 1, y, z))
+            queue.append((x - 1, y, z))
+            if y < 255:
+                queue.append((x, y + 1, z))
+                que_count += 1
+            if y > 0:
+                queue.append((x, y - 1, z))
+                que_count += 1
+            queue.append((x, y, z + 1))
+            queue.append((x, y, z - 1))
 
-        self._flood_fill_check(x + 1, y, z, dimension, max_count)
-        self._flood_fill_check(x - 1, y, z, dimension, max_count)
-        self._flood_fill_check(x, y + 1, z, dimension, max_count)
-        self._flood_fill_check(x, y - 1, z, dimension, max_count)
-        self._flood_fill_check(x, y, z + 1, dimension, max_count)
-        self._flood_fill_check(x, y, z - 1, dimension, max_count)
+            que_count += 4
+
+            yield count / que_count
 
 
 export = {
