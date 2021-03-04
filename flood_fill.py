@@ -117,6 +117,7 @@ class FloodFill(wx.Panel, OperationUI):
 
         dimension = self.canvas.dimension
         count = 0
+        air_count = 0
         que_count = 0
         max_count = self._find_size.GetValue()
         min_x, min_y, min_z = self.canvas.selection.selection_group.min
@@ -148,7 +149,7 @@ class FloodFill(wx.Panel, OperationUI):
                 continue
 
             # 探査ブロックの最大数を超えた場合終わり
-            if 0 < max_count <= count:
+            if 0 < max_count <= air_count:
                 wx.MessageBox("探査数が最大値に到達しました\n"
                               + "検査を行った分を塗りつぶしてあります\n"
                               + "不要な場合はRedoを実行してください", "塗りつぶし")
@@ -159,6 +160,8 @@ class FloodFill(wx.Panel, OperationUI):
 
             # チャンクのセーブフラグをTrueにする
             chunk.changed = True
+
+            air_count += 1
 
             # 隣接するブロックの探査キューを追加
             queue.append((x + 1, y, z))
